@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>家計管理カレンダー</title>
+    <link rel="icon" href="icon.png" type="image/png">
+    <link rel="apple-touch-icon" href="icon.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .limit-btn.active {
+            background-color: white;
+            color: #4f46e5;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            transform: translateY(-1px);
+        }
+        /* タップ時の青・赤の色味を調整 */
+        .day-safe { background-color: #ecfeff; border-color: #06b6d4; color: #0891b2; } /* Cyan-50/500/600 */
+        .day-over { background-color: #fff1f2; border-color: #f43f5e; color: #e11d48; } /* Rose-50/500/600 */
+    </style>
+</head>
+<body class="bg-slate-50 p-4 font-sans text-slate-800">
+
+<div class="max-w-md mx-auto bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-200">
+    <div class="bg-indigo-600 p-6 text-white">
+        <div class="flex justify-between items-center mb-4">
+            <button onclick="changeMonth(-1)" class="hover:bg-indigo-500 p-2 rounded-full transition">◀</button>
+            <h1 id="currentMonthDisplay" class="text-xl font-bold italic">2026年 2月</h1>
+            <button onclick="changeMonth(1)" class="hover:bg-indigo-500 p-2 rounded-full transition">▶</button>
+        </div>
+        
+        <div class="grid grid-cols-2 gap-3 mb-5">
+            <div class="flex flex-col">
+                <label class="text-[10px] opacity-80 mb-1 font-bold text-indigo-100">1日の予算 (円)</label>
+                <input type="number" id="dailyBudget" class="bg-indigo-700 border-none rounded-lg p-2 text-sm outline-none" oninput="syncBudget('daily')">
+            </div>
+            <div class="flex flex-col">
+                <label class="text-[10px] opacity-80 mb-1 font-bold text-indigo-100">月の予算 (円)</label>
+                <input type="number" id="monthlyBudget" class="bg-indigo-700 border-none rounded-lg p-2 text-sm outline-none" oninput="syncBudget('monthly')">
+            </div>
+        </div>
+
+        <div class="bg-indigo-800/40 p-4 rounded-2xl border border-indigo-400/30">
+            <label class="text-[10px] block mb-3 font-black text-indigo-100 uppercase tracking-wider text-center">週の許容超過日数（何日まで赤にしないか）</label>
+            <div class="flex justify-between items-center gap-1" id="weeklyLimitContainer"></div>
+            <div class="text-[9px] mt-3 text-indigo-200 leading-tight text-center">
+                ※月間では合計 <span id="monthlyLimitVal" class="underline font-bold text-white text-xs px-1">-</span> 日までの超過を許容します
+            </div>
+        </div>
+    </div>
+
+    <div class="p-4">
+        <div class="grid grid-cols-8 gap-1 mb-2 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+            <div>日</div><div>月</div><div>火</div><div>水</div><div>木</div><div>金</div><div>土</div>
+            <div class="text-indigo-400 border-l border-slate-200">週判定</div>
+        </div>
+
+        <div id="calendarGrid" class="grid grid-cols-8 gap-1"></div>
+
+        <div id="monthlySummary" class="mt-6 p-5 rounded-2xl flex flex-col gap-1 shadow-sm border-2 transition-all duration-500">
+            <div class="flex justify-between items-center">
+                <div class="text-xs font-bold text-slate-500 uppercase tracking-tight">今月の最終結果</div>
+                <div id="monthlyStatusText" class="text-xl font-black">---</div>
+            </div>
+            <div id="monthlyDetail" class="text-[10px] font-medium opacity-70 mt-1"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+const state = {
+    displayDate: new Date(),
+    data: {},
+    weeklyLimit: 1
+};
+
+// 1. 予算と判定基準の連動 (1ヶ月を30.4日で概算)
+function syncBudget(type) {
+    const d = document.getElementById('dailyBudget');
+    const m = document.getElementById('monthlyBudget');
+    if (type === 'daily') {
+        m.value = Math.round(d.value * 30.4);
+    } else if (type === 'monthly') {
+        d.value = Math.round(m.value / 30.4);
+    }
+    saveSettings();
+    renderCalendar();
+}
+
+// 2. 許容日数ボタンの生成
+function initLimitButtons() {
+    const container = document.getElementById('weeklyLimitContainer');
+    container.innerHTML = '';
+    for (let i = 0; i <= 7; i++) {
+        const btn = document.createElement('button');
+        btn.innerText = i;
+        btn.className = `limit-btn flex-1 aspect-square rounded-lg text-xs font-bold transition-all border border-indigo-400/30 hover:bg-indigo-500/50 ${state.weeklyLimit === i ? 'active' : 'text-indigo-200'}`;
+        btn.onclick = () => {
+            state.weeklyLimit = i;
+            saveSettings();
+            initLimitButtons();
+            updateThresholdDisplay();
+        };
+        container.appendChild(btn);
+    }
+}
+
+function updateThresholdDisplay() {
+    const lastDay = new Date(state.displayDate.getFullYear(), state.displayDate.getMonth() + 1, 0).getDate();
+    const mLimit = Math.round(state.weeklyLimit * (lastDay / 7));
+    document.getElementById('monthlyLimitVal').innerText = mLimit;
+    renderCalendar();
+}
+
+// 3. 月移動機能
+function changeMonth(diff) {
+    state.displayDate.setMonth(state.displayDate.getMonth() + diff);
+    updateThresholdDisplay();
+}
+
+// 4. カレンダー描画メインロジック
+function renderCalendar() {
+    const grid = document.getElementById('calendarGrid');
+    grid.innerHTML = '';
+
+    const year = state.displayDate.getFullYear();
+    const month = state.displayDate.getMonth();
+    const key = `${year}-${month + 1}`;
+    document.getElementById('currentMonthDisplay').innerText = `${year}年 ${month + 1}月`;
+
+    const firstDay = new Date(year, month, 1).getDay();
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    const mLimit = Math.round(state.weeklyLimit * (lastDay / 7));
+
+    // データ読み込み
+    if (!state.data[key]) state.data[key] = new Array(32).fill(0);
+    const savedData = localStorage.getItem('budget_app_data_v5');
+    if (savedData) state.data = JSON.parse(savedData);
+    if (!state.data[key]) state.data[key] = new Array(32).fill(0);
+
+    let dayCount = 1;
+    let totalOverCount = 0;
+
+    for (let row = 0; row < 6; row++) {
+        let weekOverCount = 0;
+        let hasDaysInRow = false;
+
+        for (let col = 0; col < 7; col++) {
+            const cell = document.createElement('div');
+            if (row === 0 && col < firstDay || dayCount > lastDay) {
+                cell.className = 'aspect-square';
+            } else {
+                const d = dayCount;
+                const status = state.data[key][d] || 0;
+                if (status === 2) { weekOverCount++; totalOverCount++; }
+                hasDaysInRow = true;
+                
+                cell.className = `aspect-square rounded-xl flex items-center justify-center text-sm font-bold cursor-pointer transition-all border-2 
+                    ${status === 0 ? 'bg-slate-100 border-transparent text-slate-400' : 
+                      status === 1 ? 'day-safe' : 'day-over'}`;
+                cell.innerText = d;
+                cell.onclick = () => {
+                    state.data[key][d] = (state.data[key][d] + 1) % 3;
+                    localStorage.setItem('budget_app_data_v5', JSON.stringify(state.data));
+                    renderCalendar();
+                };
+                dayCount++;
+            }
+            grid.appendChild(cell);
+        }
+
+        // 週次判定セルの生成 (◯ / ×)
+        const weekStatus = document.createElement('div');
+        weekStatus.className = 'aspect-square flex items-center justify-center border-l border-slate-100 ml-1';
+        if (hasDaysInRow) {
+            const isOver = weekOverCount > state.weeklyLimit;
+            weekStatus.innerHTML = isOver 
+                ? `<span class="bg-rose-500 text-white w-6 h-6 flex items-center justify-center rounded-full text-xs shadow-sm font-bold">×</span>`
+                : `<span class="bg-cyan-500 text-white w-6 h-6 flex items-center justify-center rounded-full text-xs shadow-sm font-bold">◯</span>`;
+        }
+        grid.appendChild(weekStatus);
+        if (dayCount > lastDay) break;
+    }
+    updateSummary(totalOverCount, mLimit);
+}
+
+// 5. 月間サマリーの更新
+function updateSummary(totalOver, mLimit) {
+    const summaryDiv = document.getElementById('monthlySummary');
+    const statusText = document.getElementById('monthlyStatusText');
+    const detail = document.getElementById('monthlyDetail');
+
+    const isOver = totalOver > mLimit;
+    if (isOver) {
+        summaryDiv.className = 'mt-6 p-5 rounded-2xl bg-rose-50 text-rose-700 border-rose-200';
+        statusText.innerText = '見直しが必要です';
+    } else {
+        summaryDiv.className = 'mt-6 p-5 rounded-2xl bg-cyan-50 text-cyan-700 border-cyan-200';
+        statusText.innerText = '✨素晴らしい✨';
+    }
+    detail.innerText = `現在の超過: ${totalOver}日 / 許容: ${mLimit}日`;
+}
+
+// 6. 設定の保存と読み込み
+function saveSettings() {
+    const settings = {
+        daily: document.getElementById('dailyBudget').value,
+        limit: state.weeklyLimit
+    };
+    localStorage.setItem('budget_app_settings', JSON.stringify(settings));
+}
+
+function loadSettings() {
+    const saved = localStorage.getItem('budget_app_settings');
+    if (saved) {
+        const settings = JSON.parse(saved);
+        document.getElementById('dailyBudget').value = settings.daily;
+        state.weeklyLimit = settings.limit;
+        syncBudget('daily');
+    } else {
+        document.getElementById('dailyBudget').value = 2000;
+        syncBudget('daily');
+    }
+}
+
+// 初期起動処理
+loadSettings();
+initLimitButtons();
+updateThresholdDisplay();
+</script>
+</body>
+</html>
